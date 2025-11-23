@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
@@ -822,6 +823,25 @@ func (p *AWSProvider) newChanges(action route53types.ChangeAction, endpoints []*
 // Example: CNAME endpoints pointing to ELBs will have a `alias` provider-specific property
 // added to match the endpoints generated from existing alias records in Route53.
 func (p *AWSProvider) AdjustEndpoints(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error) {
+
+	endpoints, err := p.adjustAliasCnameAaaaEndpoints(endpoints)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, ep := range endpoints {
+		adjustGeoProximityLocationEndpoint(ep)
+	}
+
+	endpoints, err = adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints)
+	if err != nil {
+		return nil, err
+	}
+
+	return endpoints, nil
+}
+
+func (p *AWSProvider) adjustAliasCnameAaaaEndpoints(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error) {
 	// Holds CNAME targets that we will treat as Alias records. Such records are
 	// hard coded to 'A' type aliases but we also need their 'AAAA' counterparts.
 	var aliasCnameAaaaEndpoints []*endpoint.Endpoint
@@ -880,8 +900,6 @@ func (p *AWSProvider) AdjustEndpoints(endpoints []*endpoint.Endpoint) ([]*endpoi
 		} else {
 			ep.DeleteProviderSpecificProperty(providerSpecificEvaluateTargetHealth)
 		}
-
-		adjustGeoProximityLocationEndpoint(ep)
 	}
 
 	endpoints = append(endpoints, aliasCnameAaaaEndpoints...)
@@ -904,6 +922,115 @@ func adjustGeoProximityLocationEndpoint(ep *endpoint.Endpoint) {
 			ep.SetProviderSpecificProperty(providerSpecificGeoProximityLocationBias, "0")
 		}
 	}
+}
+
+func adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error) {
+	var newEndpoints []*endpoint.Endpoint
+	var geoEndpointsByKey = make(map[endpoint.EndpointKey]map[string]*[]*geoProximity)
+
+	for _, ep := range endpoints {
+		gp := newGeoProximity(ep).withCoordinates()
+
+		if gp.isSet {
+			// Group endpoints with coordinates by record name and type
+			key := endpoint.EndpointKey{DNSName: ep.DNSName, RecordType: ep.RecordType}
+			geoEndpointsByKey[key] = make(map[string]*[]*geoProximity)
+			*geoEndpointsByKey[key][ep.SetIdentifier] = append(*geoEndpointsByKey[key][ep.SetIdentifier], gp)
+		} else {
+			// Keep endpoints without coordinates as-is
+			newEndpoints = append(newEndpoints, ep)
+		}
+	}
+
+	for _, endpointsBySet := range geoEndpointsByKey {
+		for id, endpoints := range endpointsBySet {
+			var coord = (*endpoints)[0].location.Coordinates
+
+			var fallbackEndpoints []*geoProximity
+			for id2, endpoints2 := range endpointsBySet {
+				if id != id2 {
+					fallbackEndpoints = append(fallbackEndpoints, *endpoints2...)
+				}
+			}
+
+			slices.SortStableFunc(fallbackEndpoints, func(a, b *geoProximity) int {
+				var aDist = coordinateDistance(coord, a.location.Coordinates)
+				var bDist = coordinateDistance(coord, b.location.Coordinates)
+
+				if aDist == nil && bDist == nil {
+					return 0
+				} else if aDist == nil {
+					return 1
+				} else if bDist == nil {
+					return -1
+				} else if *aDist < *bDist {
+					return -1
+				} else if *aDist > *bDist {
+					return 1
+				} else {
+					return 0
+				}
+			})
+
+			for _, ep := range *endpoints {
+				newEndpoints = append(newEndpoints, ep.endpoint)
+			}
+
+			for _, ep := range fallbackEndpoints {
+				var fallbackEp = *ep.endpoint
+				fallbackEp.SetIdentifier = id
+
+				newEndpoints = append(newEndpoints, &fallbackEp)
+			}
+		}
+	}
+
+	return newEndpoints, nil
+}
+
+func coordinateDistance(a, b *route53types.Coordinates) *float64 {
+	aLatDegrees, err := strconv.ParseFloat(*a.Latitude, 64)
+	if err != nil {
+		return nil
+	}
+
+	aLonDegrees, err := strconv.ParseFloat(*a.Longitude, 64)
+	if err != nil {
+		return nil
+	}
+
+	bLatDegrees, err := strconv.ParseFloat(*b.Latitude, 64)
+	if err != nil {
+		return nil
+	}
+
+	bLonDegrees, err := strconv.ParseFloat(*b.Longitude, 64)
+	if err != nil {
+		return nil
+	}
+
+	aLat := aLatDegrees * math.Pi / 180
+	aLon := aLonDegrees * math.Pi / 180
+	bLat := bLatDegrees * math.Pi / 180
+	bLon := bLonDegrees * math.Pi / 180
+
+	deltaLat := math.Abs(bLat - aLat)
+	if deltaLat > 360 {
+		deltaLat -= 360
+	}
+
+	deltaLon := math.Abs(bLon - aLon)
+	if deltaLon > 360 {
+		deltaLon -= 360
+	}
+
+	havDeltaLat := (1 - math.Cos(deltaLat)) / 2
+	havDeltaLon := (1 - math.Cos(deltaLon)) / 2
+
+	var havGreatCircleDist = havDeltaLat + (math.Cos(aLat) * math.Cos(bLat) * havDeltaLon)
+	var greatCircleDist = 2 * math.Asin(math.Sqrt(havGreatCircleDist))
+	var dist = greatCircleDist * 6371
+	return &dist
 }
 
 // newChange returns a route53 Change
