@@ -926,7 +926,7 @@ func adjustGeoProximityLocationEndpoint(ep *endpoint.Endpoint) {
 
 func adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints []*endpoint.Endpoint) ([]*endpoint.Endpoint, error) {
 	var newEndpoints []*endpoint.Endpoint
-	var geoEndpointsByKey = make(map[endpoint.EndpointKey]map[string]*[]*geoProximity)
+	var geoEndpointsByKey = make(map[endpoint.EndpointKey]map[string][]*geoProximity)
 
 	for _, ep := range endpoints {
 		gp := newGeoProximity(ep).withCoordinates()
@@ -934,8 +934,14 @@ func adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints []*endpoint
 		if gp.isSet {
 			// Group endpoints with coordinates by record name and type
 			key := endpoint.EndpointKey{DNSName: ep.DNSName, RecordType: ep.RecordType}
-			geoEndpointsByKey[key] = make(map[string]*[]*geoProximity)
-			*geoEndpointsByKey[key][ep.SetIdentifier] = append(*geoEndpointsByKey[key][ep.SetIdentifier], gp)
+
+			geoEndpointsForKey, ok := geoEndpointsByKey[key]
+			if !ok {
+				geoEndpointsForKey = make(map[string][]*geoProximity)
+				geoEndpointsByKey[key] = geoEndpointsForKey
+			}
+
+			geoEndpointsForKey[ep.SetIdentifier] = append(geoEndpointsForKey[ep.SetIdentifier], gp)
 		} else {
 			// Keep endpoints without coordinates as-is
 			newEndpoints = append(newEndpoints, ep)
@@ -944,14 +950,14 @@ func adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints []*endpoint
 
 	for _, endpointsBySet := range geoEndpointsByKey {
 		for id, endpoints := range endpointsBySet {
-			var coord = (*endpoints)[0].location.Coordinates
+			var coord = endpoints[0].location.Coordinates
 
 			log.Debugf("endpoint set %s: %v", id, endpoints)
 
 			var fallbackEndpoints []*geoProximity
 			for id2, endpoints2 := range endpointsBySet {
 				if id != id2 {
-					fallbackEndpoints = append(fallbackEndpoints, *endpoints2...)
+					fallbackEndpoints = append(fallbackEndpoints, endpoints2...)
 				}
 			}
 
@@ -978,7 +984,7 @@ func adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints []*endpoint
 
 			log.Debugf("sorted fallback endpoints %s: %v", id, fallbackEndpoints)
 
-			for _, ep := range *endpoints {
+			for _, ep := range endpoints {
 				newEndpoints = append(newEndpoints, ep.endpoint)
 			}
 
