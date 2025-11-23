@@ -946,12 +946,16 @@ func adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints []*endpoint
 		for id, endpoints := range endpointsBySet {
 			var coord = (*endpoints)[0].location.Coordinates
 
+			log.Debugf("endpoint set %s: %v", id, endpoints)
+
 			var fallbackEndpoints []*geoProximity
 			for id2, endpoints2 := range endpointsBySet {
 				if id != id2 {
 					fallbackEndpoints = append(fallbackEndpoints, *endpoints2...)
 				}
 			}
+
+			log.Debugf("fallback endpoints %s: %v", id, fallbackEndpoints)
 
 			slices.SortStableFunc(fallbackEndpoints, func(a, b *geoProximity) int {
 				var aDist = coordinateDistance(coord, a.location.Coordinates)
@@ -971,6 +975,8 @@ func adjustFallbackForEndpointsWithGeoproximityCoordinates(endpoints []*endpoint
 					return 0
 				}
 			})
+
+			log.Debugf("sorted fallback endpoints %s: %v", id, fallbackEndpoints)
 
 			for _, ep := range *endpoints {
 				newEndpoints = append(newEndpoints, ep.endpoint)
