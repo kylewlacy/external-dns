@@ -130,6 +130,8 @@ func (ns *nodeSource) Endpoints(_ context.Context) ([]*endpoint.Endpoint, error)
 			}
 		}
 
+		providerSpecific, setIdentifier := annotations.ProviderSpecificAnnotations(node.Annotations)
+
 		dnsNames, err := ns.collectDNSNames(node)
 		if err != nil {
 			return nil, err
@@ -141,6 +143,8 @@ func (ns *nodeSource) Endpoints(_ context.Context) ([]*endpoint.Endpoint, error)
 			for _, addr := range addrs {
 				ep := endpoint.NewEndpointWithTTL(dns, suitableType(addr), ttl)
 				ep.WithLabel(endpoint.ResourceLabelKey, fmt.Sprintf("node/%s", node.Name))
+				ep.ProviderSpecific = providerSpecific
+				ep.SetIdentifier = setIdentifier
 
 				log.Debugf("adding endpoint %s target %s", ep, addr)
 				key := endpoint.EndpointKey{
