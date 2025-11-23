@@ -147,10 +147,7 @@ func (ns *nodeSource) Endpoints(_ context.Context) ([]*endpoint.Endpoint, error)
 				ep.SetIdentifier = setIdentifier
 
 				log.Debugf("adding endpoint %s target %s", ep, addr)
-				key := endpoint.EndpointKey{
-					DNSName:    ep.DNSName,
-					RecordType: ep.RecordType,
-				}
+				key := ep.Key()
 				if _, ok := endpoints[key]; !ok {
 					epCopy := *ep
 					epCopy.RecordType = key.RecordType
