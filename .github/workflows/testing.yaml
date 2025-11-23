@@ -3,8 +3,6 @@ name: Go
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
 
 permissions:
   contents: read  #  to fetch code (actions/checkout)
@@ -44,22 +42,26 @@ jobs:
         GOMEMLIMIT: 8192MiB
       run: make go-test
 
-    - name: Send coverage
-      uses: coverallsapp/github-action@v2
-      with:
-        file: profile.cov
-        format: golang
-        flag-name: run-${{ join(matrix.*, '-') }}
-        parallel: true
-      continue-on-error: true
-
-  finish:
-    needs: test
-    if: ${{ always() }}
+  publish:
+    permissions:
+      packages: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
-    - name: Coveralls Finished
-      uses: coverallsapp/github-action@v2
-      with:
-        parallel-finished: true
-        carryforward: "run-ubuntu-latest,run-macos-latest"
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+        id: go
+      - uses: ko-build/setup-ko@v0.6
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push OCI image
+        run: make build.push/multiarch IMAGE=ghcr.io/kylewlacy/external-dns VERSION=latest
